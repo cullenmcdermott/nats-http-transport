@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  nats:
+    image: nats:2.11-alpine
+    command: ["nats-server", "--jetstream", "--store_dir", "/data", "--http_port", "8222"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - nats_data:/data
+    networks:
+      - nats_network
+    healthcheck:
+      test: wget http://localhost:8222/healthz -q -S -O -
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  agent:
+    build:
+      context: ..
+      dockerfile: examples/agent/Dockerfile
+    environment:
+      - NATS_URL=nats://nats:4222
+    depends_on:
+      nats:
+        condition: service_healthy
+    networks:
+      - nats_network
+    restart: unless-stopped
+
+  client:
+    build:
+      context: ..
+      dockerfile: examples/client/Dockerfile
+    environment:
+      - NATS_URL=nats://nats:4222
+    depends_on:
+      nats:
+        condition: service_healthy
+    networks:
+      - client_network
+      - nats_network
+    restart: unless-stopped
+
+networks:
+  nats_network:
+    driver: bridge
+    internal: false
+  client_network:
+    driver: bridge
+    internal: true
+
+volumes:
+  nats_data:
