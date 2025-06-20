@@ -45,6 +45,69 @@ services:
       - nats_network
     restart: unless-stopped
 
+  stream-info:
+    image: natsio/nats-box:latest
+    environment:
+      - NATS_URL=nats://nats:4222
+    depends_on:
+      nats:
+        condition: service_healthy
+    networks:
+      - nats_network
+    restart: unless-stopped
+    command: >
+      sh -c "
+        while true; do
+          TIMESTAMP=$$(date '+%Y-%m-%d %H:%M:%S')
+          
+          # Check NATS server info
+          SERVER_INFO=$$(nats --server=nats://nats:4222 server info --json 2>/dev/null)
+          if [ $$? -eq 0 ]; then
+            CONNECTIONS=$$(echo \"$$SERVER_INFO\" | jq -r '.connections // 0')
+            IN_MSGS=$$(echo \"$$SERVER_INFO\" | jq -r '.in_msgs // 0')
+            OUT_MSGS=$$(echo \"$$SERVER_INFO\" | jq -r '.out_msgs // 0')
+            IN_BYTES=$$(echo \"$$SERVER_INFO\" | jq -r '.in_bytes // 0')
+            OUT_BYTES=$$(echo \"$$SERVER_INFO\" | jq -r '.out_bytes // 0')
+            echo \"[$$TIMESTAMP] NATS Server - Connections: $$CONNECTIONS, In: $${IN_MSGS}msgs/$${IN_BYTES}bytes, Out: $${OUT_MSGS}msgs/$${OUT_BYTES}bytes\"
+          else
+            echo \"[$$TIMESTAMP] NATS Server - Connection failed\"
+          fi
+          
+          # Check JetStream info
+          JS_INFO=$$(nats --server=nats://nats:4222 server check jetstream --json 2>/dev/null)
+          if [ $$? -eq 0 ]; then
+            echo \"$$JS_INFO\" | jq -r --arg ts \"$$TIMESTAMP\" '\"[\" + $$ts + \"] JetStream - Streams: \" + (.streams // 0 | tostring) + \", Consumers: \" + (.consumers // 0 | tostring) + \", Messages: \" + (.messages // 0 | tostring) + \", Bytes: \" + (.bytes // 0 | tostring)'
+          fi
+          
+          # Check specific HTTP transport streams
+          for stream in HTTP_REQUESTS $$(nats --server=nats://nats:4222 stream list 2>/dev/null | grep \"HTTP_REPLIES_\" || true); do
+            STREAM_INFO=$$(nats --server=nats://nats:4222 stream info \"$$stream\" --json 2>/dev/null)
+            if [ $$? -eq 0 ]; then
+              echo \"$$STREAM_INFO\" | jq -r --arg ts \"$$TIMESTAMP\" '\"[\" + $$ts + \"] Stream \" + .config.name + \" - Msgs: \" + (.state.messages | tostring) + \", Bytes: \" + (.state.bytes | tostring) + \", Consumers: \" + (.state.consumer_count | tostring) + \", Subject: \" + (.config.subjects[0] // \"N/A\")'
+              
+              # Check consumers for this stream
+              STREAM_CONSUMERS=$$(nats --server=nats://nats:4222 consumer list \"$$stream\" --json 2>/dev/null)
+              if [ $$? -eq 0 ] && [ \"$$STREAM_CONSUMERS\" != \"null\" ] && [ \"$$STREAM_CONSUMERS\" != \"[]\" ]; then
+                echo \"$$STREAM_CONSUMERS\" | jq -r --arg ts \"$$TIMESTAMP\" '.[] | \"[\" + $$ts + \"]   Consumer: \" + .name + \" - Pending: \" + (.num_pending | tostring) + \", Delivered: \" + (.delivered.stream_seq | tostring) + \", Acked: \" + (.ack_floor.stream_seq | tostring)'
+              fi
+            fi
+          done
+          
+          # Check for any other streams
+          ALL_STREAMS=$$(nats --server=nats://nats:4222 stream list --json 2>/dev/null)
+          if [ $$? -eq 0 ] && [ \"$$ALL_STREAMS\" != \"null\" ] && [ \"$$ALL_STREAMS\" != \"[]\" ]; then
+            OTHER_STREAMS=$$(echo \"$$ALL_STREAMS\" | jq -r '.[] | select(. != \"HTTP_REQUESTS\" and (. | startswith(\"HTTP_REPLIES_\") | not))')
+            if [ \"$$OTHER_STREAMS\" != \"\" ]; then
+              echo \"$$OTHER_STREAMS\" | while read stream; do
+                echo \"[$$TIMESTAMP] Other Stream: $$stream\"
+              done
+            fi
+          fi
+          
+          sleep 10
+        done
+      "
+
 networks:
   nats_network:
     driver: bridge

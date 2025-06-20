@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"time"
@@ -89,6 +90,11 @@ func handlePing(body []byte, requestID string) (*http.Response, error) {
 	}
 
 	log.Printf("📨 Processing ping (ID: %s): %s", requestID, ping.Message)
+
+	// Add random jitter between 10-500ms to simulate processing time
+	jitter := time.Duration(10+rand.Intn(491)) * time.Millisecond
+	log.Printf("⏱️ Adding %v processing jitter (ID: %s)", jitter, requestID)
+	time.Sleep(jitter)
 
 	// Create pong response
 	pong := PongMessage{
